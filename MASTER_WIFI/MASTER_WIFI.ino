@@ -1,69 +1,44 @@
-/*
-   TimeNTP_ESP8266WiFi.ino
-   Example showing time sync to NTP time source
-
-   This sketch uses the ESP8266WiFi library
-*/
-
-/* still-forest-62261.herokuapp.com/give_bulk?òfflinedata=string*/
-
-/* Extra libraries */
-#include <DHT.h>
-#include <ESP8266WiFi.h>
+/*--------TIME LIBS ----------*/
 #include <TimeLib.h>
+#include <ESP8266WiFi.h>
 #include <WiFiUdp.h>
 
-#define host "still-forest-62261.herokuapp.com"
-#define httpPort 80
-
+/*-------- SENSOR LIBS ----------*/
+#include <WiFiClientSecure.h>
+#include <DHT.h>
 #define DHTTYPE DHT11
 #define DHTPIN 0
 #define lightSensorPin A0
 
-/* Defintions for variables */
-String line = "";
+const char ssid[] = "TLU";  //  your network SSID (name)
+const char pass[] = "";       // your network password
+const char* host = "still-forest-62261.herokuapp.com";
+const int httpsPort = 443;
+
 String data = "";
 int lightSensorValue = 0;
 int temp_f = 0;
 int light = 0;
 int temp = 0;
 int bulb = 0;
-int i;
 
-const char ssid[] = "TLU";  //  your network SSID (name)
-const char pass[] = "";       // your network password
+// Use web browser to view and copy
+// SHA1 fingerprint of the certificate
+const char* fingerprint = "CF 05 98 89 CA FF 8E D8 5E 5C E0 C2 E4 F7 E6 C3 C7 50 DD 5C";
+
+DHT dht(DHTPIN, DHTTYPE);
+WiFiClientSecure client;
 
 // NTP Servers:
 static const char ntpServerName[] = "us.pool.ntp.org";
-//static const char ntpServerName[] = "time.nist.gov";
-//static const char ntpServerName[] = "time-a.timefreq.bldrdoc.gov";
-//static const char ntpServerName[] = "time-b.timefreq.bldrdoc.gov";
-//static const char ntpServerName[] = "time-c.timefreq.bldrdoc.gov";
-
-const int timeZone = 0;     // Central European Time
-//const int timeZone = -5;  // Eastern Standard Time (USA)
-//const int timeZone = -4;  // Eastern Daylight Time (USA)
-//const int timeZone = -8;  // Pacific Standard Time (USA)
-//const int timeZone = -7;  // Pacific Daylight Time (USA)
+const int timeZone = 0;
 
 
 WiFiUDP Udp;
 unsigned int localPort = 8888;  // local port to listen for UDP packets
 
 time_t getNtpTime();
-void digitalClockDisplay();
-void printDigits(int digits);
 void sendNTPpacket(IPAddress &address);
-
-WiFiClient client;
-DHT dht(DHTPIN, DHTTYPE);
-
-void send_offlinedata(String data) {
-  String url = "https://still-forest-62261.herokuapp.com/give_bulk?offlinedata=";
-  url += data;
-  Serial.println(url);
-  client.print(String("GET ") + url + " HTTP/1.1\r\n" + "Host: " + host + "\r\n" + "Connection: close\r\n\r\n");
-}
 
 void setup()
 {
@@ -75,6 +50,11 @@ void setup()
   Serial.println(ssid);
   WiFi.begin(ssid, pass);
 
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
   Serial.print("IP number assigned by DHCP is ");
   Serial.println(WiFi.localIP());
   Serial.println("Starting UDP");
@@ -84,78 +64,61 @@ void setup()
   Serial.println("waiting for sync");
   setSyncProvider(getNtpTime);
   setSyncInterval(300);
-
-  pinMode(5, OUTPUT);
-  pinMode(16, OUTPUT);
-  pinMode(4, OUTPUT);
-
 }
 
-time_t prevDisplay = 0; // when the digital clock was displayed
+void loop() {
+  
+  if (!client.connect(host, httpsPort)) {
+    Serial.println("connection failed");
+    return;
+  }
 
-void loop()
-{
-
-  delay(5000);
+  if (client.verify(fingerprint, host)) {
+    Serial.println("certificate matches");
+  } else {
+    Serial.println("certificate doesn't match");
+  }
 
   temp_f = dht.readTemperature();
   lightSensorValue = analogRead(A0);
 
-  Serial.print("connecting to ");
-  Serial.println(host);
-  
-  // Use WiFiClient class to create TCP connections
- /* while (i < 5) {
-    temp_f = dht.readTemperature();
-    lightSensorValue = analogRead(A0);
-    String time_string;
-    time_string += String(hour());
-    time_string += String(':');
-    time_string += String(minute());
-    time_string += String(':');
-    time_string += String(second());
-    time_string += String("%20");
-    time_string += String(day());
-    time_string += String('.');
-    time_string += String(month());
-    time_string += String('.');
-    time_string += String(year());
-    data += time_string + "%20" + (String) temp_f + "%20" + (String) lightSensorValue + ";";
-    Serial.println(data);
-    i++;
-    delay(1000);
-
-    if (i == 5) {
-      Serial.println("Sending PAYLOAD");
-      send_offlinedata(data);
-    }
-  }
-  */
-  Serial.print("Requesting URL: ");
-  //send_sensordata();
   String url = "https://still-forest-62261.herokuapp.com/save_data?light=";
   url += lightSensorValue;
   url += "&temp=";
   url += temp_f;
-  client.print(String("GET ") + url + " HTTP/1.1\r\n" + "Host: " + host + "\r\n" + "Connection: close\r\n\r\n");
+  Serial.print("requesting URL: ");
+  Serial.println(url);
 
-  // Read all the lines of the reply from server and print them to Serial
-  while (client.available()) {
-    line += client.readStringUntil('\n');
+  client.print(String("GET ") + url + " HTTP/1.1\r\n" +
+               "Host: " + host + "\r\n" +
+               "User-Agent: BuildFailureDetectorESP8266\r\n" +
+               "Connection: close\r\n\r\n");
+
+  Serial.println("request sent");
+  while (client.connected()) {
+    String line = client.readStringUntil('\n');
     Serial.println(line);
+    if (line == "\r") {
+      Serial.println("headers received");
+      break;
+    }
   }
+  String line = client.readStringUntil('\n');
 
   light = (int) line[line.indexOf('ä') + 1];
   temp = (int) line[line.indexOf('ä') + 2];
   bulb = (int) line[line.indexOf('ä') + 3];
 
-  Serial.println(light);
-  Serial.println(temp);
-  Serial.println(bulb);
-
-  //5 - port reserved for bulb
-  //4 - port reserved for nightlight
-  //16 - port reserved for heating device
+  if (line.startsWith("{\"state\":\"success\"")) {
+    Serial.println("esp8266/Arduino CI successfull!");
+  } else {
+    Serial.println("esp8266/Arduino CI has failed");
+  }
+  Serial.println("reply was:");
+  Serial.println("==========");
+  Serial.println(line);
+  Serial.println("==========");
+  Serial.println("closing connection");
 
   if (light == '0') {
     digitalWrite(4, LOW);
@@ -171,42 +134,37 @@ void loop()
     digitalWrite(5, HIGH);
   }
 
-  Serial.println("closing connection");
+  Serial.println(get_timestring());
   line = "";
-
-  digitalClockDisplay();
 }
 
-void digitalClockDisplay()
-{
-  // digital clock display of the time
+
+/*-------- Timestring ----------*/
+String get_timestring() {
   String time_string;
-  time_string += String(hour());
+  time_string += String(get_right_format(hour()));
   time_string += String(':');
-  time_string += String(minute());
-  time_string += String(':');
-  time_string += String(second());
+  time_string += String(get_right_format(minute()));
   time_string += String(' ');
-  time_string += String(day());
+  time_string += String(get_right_format(day()));
   time_string += String('.');
-  time_string += String(month());
+  time_string += String(get_right_format(month()));
   time_string += String('.');
   time_string += String(year());
-
-  Serial.println(time_string);
+  return time_string;
 }
 
-void printDigits(int digits)
-{
-  // utility for digital clock display: prints preceding colon and leading 0
-  Serial.print(":");
-  if (digits < 10)
-    Serial.print('0');
-  Serial.print(digits);
+String get_right_format(int digit){
+  if(digit < 10){
+    String new_digit = '0' + (String) digit;
+    return new_digit;
+  } else {
+    return (String) digit;
+  }
 }
 
 /*-------- NTP code ----------*/
-
+/*-------- DO NOT TOUCH ----------*/
 const int NTP_PACKET_SIZE = 48; // NTP time is in the first 48 bytes of message
 byte packetBuffer[NTP_PACKET_SIZE]; //buffer to hold incoming & outgoing packets
 
